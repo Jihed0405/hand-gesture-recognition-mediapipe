@@ -6,15 +6,42 @@ import argparse
 import itertools
 from collections import Counter
 from collections import deque
-
+from gtts import gTTS
+import os
 import cv2 as cv
 import numpy as np
 import mediapipe as mp
-
+import threading
 from utils import CvFpsCalc
 from model import KeyPointClassifier
 from model import PointHistoryClassifier
+import queue
+import pyttsx3
 
+
+class ThreadSafeEngine:
+    def __init__(self):
+        self._engine = pyttsx3.init()
+        self._engine_lock = threading.Lock()
+        self._speech_queue = queue.Queue()
+        self._thread = threading.Thread(target=self._process_speech_queue)
+        self._thread.start()
+
+    def speak_async(self, text):
+        self._speech_queue.put(text)
+
+    def _process_speech_queue(self):
+        while True:
+            text = self._speech_queue.get()
+            if text is None:
+                break
+            with self._engine_lock:
+                self._engine.say(text)
+                self._engine.runAndWait()
+
+    def stop(self):
+        self._speech_queue.put(None)  # Signal the thread to stop
+        self._thread.join()  # Wait for the thread to finish
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -159,6 +186,9 @@ def main():
                     finger_gesture_history).most_common()
 
                 # Drawing part
+
+                # Initialize the thread-safe TTS engine
+                engine = ThreadSafeEngine()
                 debug_image = draw_bounding_rect(use_brect, debug_image, brect)
                 debug_image = draw_landmarks(debug_image, landmark_list)
                 debug_image = draw_info_text(
@@ -167,7 +197,7 @@ def main():
                     handedness,
                     keypoint_classifier_labels[hand_sign_id],
                     point_history_classifier_labels[most_common_fg_id[0][0]],
-                )
+                engine)
         else:
             point_history.append([0, 0])
 
@@ -491,8 +521,9 @@ def draw_bounding_rect(use_brect, image, brect):
     return image
 
 
+
 def draw_info_text(image, brect, handedness, hand_sign_text,
-                   finger_gesture_text):
+                   finger_gesture_text,engine):
     cv.rectangle(image, (brect[0], brect[1]), (brect[2], brect[1] - 22),
                  (0, 0, 0), -1)
 
@@ -503,11 +534,23 @@ def draw_info_text(image, brect, handedness, hand_sign_text,
                cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv.LINE_AA)
 
     if finger_gesture_text != "":
-        cv.putText(image, "Finger Gesture:" + finger_gesture_text, (10, 60),
+        finger_gesture_full_text = "Finger Gesture:" + finger_gesture_text
+        cv.putText(image,finger_gesture_full_text, (10, 60),
                    cv.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 4, cv.LINE_AA)
         cv.putText(image, "Finger Gesture:" + finger_gesture_text, (10, 60),
                    cv.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2,
                    cv.LINE_AA)
+         # Convert text to speech using gTTS test
+        '''
+        tts = gTTS(text=info_text, lang='en')
+        tts.save("output.mp3")
+
+        # Play the generated audio file
+        os.system("start output.mp3")
+        '''
+        
+        # Speak asynchronously in a separate thread
+        threading.Thread(target=engine.speak_async, args=(info_text,)).start()
 
     return image
 
